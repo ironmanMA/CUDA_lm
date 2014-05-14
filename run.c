@@ -17,11 +17,11 @@ String_Element** stringUnique;
  * P - To-Be-Predicted
  */
 //char data_layout[] = {'C','C','C','N','N','N','N','P'};
-char data_layout[] = {what ever your layout is...};
+char data_layout[] = {'N','N','P'};
 int* layout_Unique;
 int Matrix_Rows,Matrix_Cols;
 struct timeb time_start,time_end;
-int MaxBuffer = INT_MAX;
+int MaxBuffer = 10000;
 
 //float matrices post dummy coding
 
@@ -41,6 +41,25 @@ int FinalMatrixSize;
 //replacement for the sawp
 int replaceForSwap;
 
+
+
+/**
+* To print matrices
+*/
+void print(char* message){
+/** to test ***/
+		int sq_row,sq_col;
+		printf("\n %s \n",message);
+		for(sq_row=0;sq_row<Matrix_Cols;sq_row++){
+			for(sq_col=0;sq_col<Matrix_Cols;sq_col++){
+				printf("%f ",Post_Multiply_Elements[sq_row][sq_col]);
+			}printf("\n");
+		}printf("\n");printf(" Result Matrix \n");
+		for(sq_row=0;sq_row<Matrix_Cols;sq_row++){
+			printf("%f ",Post_Result_Elements[sq_row]);
+			printf("\n");
+		}
+}
 
 /**
  * Find number of rows in the file
@@ -188,11 +207,10 @@ int ModifyWithDummyCoding(char* filename, String_Element** strings)
 	int final_cols = 0;
 	int temp_Unique;
 	int iter_col,iter_row;
-//	gettimeofday(&time_start, NULL);
+
 	// to find-length of each row and populate strings
 	loadStringData(filename, strings);
-//	gettimeofday(&time_end, NULL);
-//	printf("After fclose with %d lines within  %lu ms \n\n",Matrix_Rows, (time_end.tv_usec - time_start.tv_usec)/1000);
+
 	printf("After fclose with %d lines \n\n",Matrix_Rows);
 
 
@@ -297,11 +315,13 @@ int ModifyWithDummyCoding(char* filename, String_Element** strings)
 	Matrix_Cols = final_cols;
 
 
+	
 	printf("Original Matrix ?? \n");getchar();
 	for(iter_row =0;iter_row<Matrix_Rows;iter_row++){
 		for(iter_col =0;iter_col<Matrix_Cols;iter_col++){
 			printf("%f ",Multiply_Elements[iter_row][iter_col]);
-		}printf("\n");
+		}
+		printf("\t result %f \n",Result_Elements[iter_row]);
 	}
 	printf("\n");
 
@@ -348,7 +368,8 @@ int multiplyWithTransposeNO_CUDA()
 	for(sq_row=0;sq_row<Matrix_Cols;sq_row++){
 		for(sq_col=0;sq_col<Matrix_Cols;sq_col++){
 			printf("%f ",Post_Multiply_Elements[sq_row][sq_col]);
-		}printf("\n");
+		}
+		printf("\t result %f \n",Post_Result_Elements[sq_row]);
 	}
 
 	ftime(&time_end);
@@ -502,36 +523,17 @@ int GaussianEliminateforCoeffs()
 	printf("\n\n Gaussian !!!");
 	AdjustDiagonalElements();
 
-	printf("\n Post Adjusting ??\n");
-	getchar();
-	for(sq_row=0; sq_row<Matrix_Cols; sq_row++) {
-		for(sq_col=0; sq_col<Matrix_Cols; sq_col++) {
-			printf("%f ",Post_Multiply_Elements[sq_row][sq_col]);
-		}
-		printf("\n");
-	}
-	printf("\n");
-	printf(" Result Matrix \n");
-	for(sq_row=0; sq_row<Matrix_Cols; sq_row++) {
-		printf("%f ",Post_Result_Elements[sq_row]);
-		printf("\n");
-	}
-	printf("\n final size to be dealt with is %d",FinalMatrixSize);
-
 	ConvertoIdentityMatrixWithoutCUDA();
 //	ConvertoIdentityMatrixWithCUDA();
 
-	printf("\n Post Identity ??\n");getchar();
+	printf("\n Post Gaussian Elimination??\n");getchar();
 	for(sq_row=0;sq_row<Matrix_Cols;sq_row++){
 		for(sq_col=0;sq_col<Matrix_Cols;sq_col++){
 			printf("%f ",Post_Multiply_Elements[sq_row][sq_col]);
-		}printf("\n");
+		}
+		printf("\t result %f \n",Post_Result_Elements[sq_row]);
 	}
-	printf("\n");printf(" Result Matrix \n");
-	for(sq_row=0;sq_row<Matrix_Cols;sq_row++){
-		printf("%f ",Post_Result_Elements[sq_row]);
-		printf("\n");
-	}
+	
 	printf("\n final size to be dealt with is %d",FinalMatrixSize);
 	
 	return 0;
@@ -555,19 +557,7 @@ void findCoeffs()
 int main()
 {
 	//file to get data from
-	char* CSV_file=NULL;
-	if(argc>1){
-		CSV_file=argv[1];
-		if(argc>2){
-			int index;
-			for(index=2;index<=argc;index++){
-
-			
-		}
-	}
-	else{
-		CSV_file = "whatevr your file path is";
-	}
+	char* CSV_file = "F:/C/tests2.csv";
 	
 	//String matrix
 	String_Element* strings;
