@@ -17,11 +17,11 @@ String_Element** stringUnique;
  * P - To-Be-Predicted
  */
 //char data_layout[] = {'C','C','C','N','N','N','N','P'};
-char data_layout[] = {'N','N','P'};
+char data_layout[] = {Your data layout};
 int* layout_Unique;
 int Matrix_Rows,Matrix_Cols;
 struct timeb time_start,time_end;
-int MaxBuffer = 10000;
+int MaxBuffer = INT_MAX;
 
 //float matrices post dummy coding
 
@@ -42,24 +42,33 @@ int FinalMatrixSize;
 int replaceForSwap;
 
 
+/*
+ * return 0 when zero 1 otherwise
+ */
+double epsilon = 0.000001;
+int checkZero(double num){
+	int result =1;
+	if(num<0 && (-num)<epsilon ){
+		result =0;
+	}
+	else if(num<epsilon){
+		result=0;
+	}
+	return result;
+} 
 
 /**
-* To print matrices
-*/
-void print(char* message){
-/** to test ***/
-		int sq_row,sq_col;
-		printf("\n %s \n",message);
-		for(sq_row=0;sq_row<Matrix_Cols;sq_row++){
-			for(sq_col=0;sq_col<Matrix_Cols;sq_col++){
-				printf("%f ",Post_Multiply_Elements[sq_row][sq_col]);
-			}printf("\n");
-		}printf("\n");printf(" Result Matrix \n");
-		for(sq_row=0;sq_row<Matrix_Cols;sq_row++){
-			printf("%f ",Post_Result_Elements[sq_row]);
-			printf("\n");
+ *	prints the result matrix 
+ */
+ void printMatrix(){
+	int sq_row,sq_col;
+	for(sq_row=0;sq_row<Matrix_Cols;sq_row++){
+		for(sq_col=0;sq_col<Matrix_Cols;sq_col++){
+			printf("%10.17f ",Post_Multiply_Elements[sq_row][sq_col]);
 		}
-}
+		printf("\t result %10.17f \n",Post_Result_Elements[sq_row]);
+	}
+ }
 
 /**
  * Find number of rows in the file
@@ -370,8 +379,7 @@ int multiplyWithTransposeNO_CUDA()
 			printf("%f ",Post_Multiply_Elements[sq_row][sq_col]);
 		}
 		printf("\t result %f \n",Post_Result_Elements[sq_row]);
-	}
-
+	}getchar();
 	ftime(&time_end);
 	iter_row = (int)(1000.0*(time_end.time - time_start.time)
 	                 +(time_end.millitm - time_start.millitm));
@@ -394,20 +402,20 @@ int findReplacement(int diag)
 	int iter_row,iter_col;
 
 	//try on the rows below diag !!!
-	for(iter_row=diag+1; iter_row<FinalMatrixSize; iter_row++) {
-		if(Post_Multiply_Elements[iter_row][diag]!=0) {
+	for(iter_row=Matrix_Cols-1; iter_row>diag; iter_row--) {
+		if(checkZero(Post_Multiply_Elements[iter_row][diag])) {
 			replaceForSwap = iter_row;
 			return 0;
 		}
 	}
 
-	for(iter_col=diag+1; iter_col<FinalMatrixSize; iter_col++) {
-		if(Post_Multiply_Elements[diag][iter_col]!=0) {
+	for(iter_col=Matrix_Cols-1; iter_col>diag; iter_col--) {
+		if(checkZero(Post_Multiply_Elements[diag][iter_col])) {
 			replaceForSwap = iter_col;
 			return 1;
-		} else if(Post_Multiply_Elements[diag][iter_col]==0) {
-			for(iter_row = diag+1; iter_row<FinalMatrixSize; iter_row++) {
-				if(Post_Multiply_Elements[iter_row][iter_col]!=0) {
+		} else if(!checkZero(Post_Multiply_Elements[diag][iter_col])) {
+			for(iter_row =Matrix_Cols-1; iter_row>diag; iter_row--) {
+				if(checkZero(Post_Multiply_Elements[iter_row][iter_col])) {
 					replaceForSwap = iter_col;
 					return 1;
 				}
@@ -431,6 +439,11 @@ void swapMatrix(int RoworColumn, int swap1, int swap2)
 			Post_Multiply_Elements[swap1][iter] = Post_Multiply_Elements[swap2][iter];
 			Post_Multiply_Elements[swap2][iter]=temp_value;
 		}
+		
+			// swapping the right had side
+		temp_value = Post_Result_Elements[swap1];
+		Post_Result_Elements[swap1] = Post_Result_Elements[swap2];
+		Post_Result_Elements[swap2] = temp_value;
 
 	} else if(RoworColumn==1) { // column-swap so iter over rows
 		for(iter=0; iter<FinalMatrixSize; iter++) {
@@ -438,12 +451,8 @@ void swapMatrix(int RoworColumn, int swap1, int swap2)
 			Post_Multiply_Elements[iter][swap1] = Post_Multiply_Elements[iter][swap2];
 			Post_Multiply_Elements[iter][swap2]=temp_value;
 		}
-
 	}
-	// swapping the right had side
-	temp_value = Post_Result_Elements[swap1];
-	Post_Result_Elements[swap1] = Post_Result_Elements[swap2];
-	Post_Result_Elements[swap2] = temp_value;
+
 
 }
 
@@ -479,23 +488,54 @@ int AdjustDiagonalElements()
  *	Ends up making all the rows below that colum into zeros
  * takes operations on all rows except on itself
  */
-void clearRowsBelow(int diag)
-{
-	int iter_row,iter_col;
+int clearRowsBelow(int diag){
+	
+	int iter_row,iter_col,replac;
 
-	for(iter_row=0; iter_row<FinalMatrixSize; iter_row++) {
-		if(iter_row!=diag) {
-			double multiplier=Post_Multiply_Elements[iter_row][diag];
-			double divider=Post_Multiply_Elements[diag][diag];
-			for(iter_col=0; iter_col<FinalMatrixSize; iter_col++) {
-//				Post_Multiply_Elements[iter_row][iter_col] -= (Post_Multiply_Elements[iter_row][iter_col]*Post_Multiply_Elements[diag][diag] - Post_Multiply_Elements[iter_row][diag]*Post_Multiply_Elements[diag][iter_col]);
-				Post_Multiply_Elements[iter_row][iter_col] -= (Post_Multiply_Elements[diag][iter_col]*multiplier)/(divider);
+	double divider=Post_Multiply_Elements[diag][diag];
+	if(checkZero(divider)){
+		//for-loop chalani
+		for(iter_row=0; iter_row<FinalMatrixSize; iter_row++) {
+			if(iter_row!=diag) {
+				double multiplier=Post_Multiply_Elements[iter_row][diag];
+				for(iter_col=0; iter_col<FinalMatrixSize; iter_col++) {
+					Post_Multiply_Elements[iter_row][iter_col] -= (Post_Multiply_Elements[diag][iter_col]*multiplier)/(divider);
+				}
+					Post_Result_Elements[iter_row] -= (Post_Result_Elements[diag]*multiplier)/(divider);
 			}
-//			Post_Result_Elements[iter_row] -= (Post_Result_Elements[iter_row]*Post_Multiply_Elements[diag][diag] - Post_Multiply_Elements[iter_row][diag]*Post_Result_Elements[diag]);
-			Post_Result_Elements[iter_row] -= (Post_Result_Elements[diag]*multiplier)/(divider);
 		}
-	}
+	}else{
+		replac = findReplacement(diag);
+			
+			if(replac==0) { //rows
+//				printf("\n zeros at %f diagona at %d with replacement %d ... \n",Post_Multiply_Elements[diag-1][diag-1],diag,replaceForSwap);
+//				getchar();printMatrix();
 
+				//access replaceForSwap for row-swapping
+				swapMatrix(0, diag, replaceForSwap);
+				printf("\n post swap replac zero with %f ... \n",Post_Multiply_Elements[diag][diag] );
+				getchar();printMatrix();
+				clearRowsBelow(diag);
+			} else if(replac==1) { //columns
+//				printf("\n zeros at %f diagona at %d with replacement %d !!! \n",Post_Multiply_Elements[diag-1][diag-1],diag,replaceForSwap);
+//				getchar();printMatrix();
+				// access replaceForSwap for colum-swapping
+				swapMatrix(1,diag,replaceForSwap);
+				//run the findReplacement again to get the row to swap
+				findReplacement(diag);
+				swapMatrix(0, diag, replaceForSwap);
+//				printf("\n post swap replac one with %f !!! \n",Post_Multiply_Elements[diag][diag] );
+//				getchar();printMatrix();
+				clearRowsBelow(diag);
+			} else if(replac<0) {
+				printf("\n\n\n\n\n zeros at %f diagona at %d and Cols are %d\n",Post_Multiply_Elements[diag-1][diag-1],diag,Matrix_Cols);getchar();
+				FinalMatrixSize = diag;
+				printf(" Replac Zeros Aya THIS IS THE END \n\n\n\n\n");
+				return -1;
+			}
+		
+	}	
+	return 0;
 }
 
 /*
@@ -508,8 +548,10 @@ void ConvertoIdentityMatrixWithoutCUDA()
 	int iter_diag;
 
 	//by clearing rows below them in the same colum
-	for(iter_diag =0; iter_diag<FinalMatrixSize; iter_diag++) {
-		clearRowsBelow(iter_diag);
+	for(iter_diag =0; iter_diag<Matrix_Cols; iter_diag++) {
+		if(clearRowsBelow(iter_diag)==-1){
+			break;
+		}
 	}
 
 }
@@ -557,7 +599,7 @@ void findCoeffs()
 int main()
 {
 	//file to get data from
-	char* CSV_file = "F:/C/tests2.csv";
+	char* CSV_file = "Your file path";
 	
 	//String matrix
 	String_Element* strings;
