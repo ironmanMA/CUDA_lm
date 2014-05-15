@@ -4,6 +4,13 @@
 #include <limits.h>
 #include <sys/timeb.h>
 
+#include "cuda.h" 
+#include "cuda_runtime.h"
+#include "device_launch_parameters.h" 
+
+#define BLOCK_SIZE 16
+
+
 typedef struct {
 	char* stringValue;
 } String_Element;
@@ -21,7 +28,7 @@ char data_layout[] = {'C','C','C','N','N','N','N','P'};
 int* layout_Unique;
 int Matrix_Rows,Matrix_Cols;
 struct timeb time_start,time_end;
-int MaxBuffer = INT_MAX;
+int MaxBuffer = 100;
 
 //float matrices post dummy coding
 
@@ -30,20 +37,29 @@ double** Multiply_Elements;
 //Matrix post multiplication with its Transpose
 double** Post_Multiply_Elements;
 
-// Ax=B Apart
-double* Multiply_Elements_CUDA;
+// Ax=B Apart  on host
+double* Multiply_Elements_CUDA;//hA,hB
 //Matrix post multiplication for CUDA
-double* Post_Multiplication_CUDA;
+double* Post_Multiplication_CUDA;//hC
+//Matrix pre multiplication for CUDA on Device
+double* Multiply_Elements_CUDA_Device;//dA,dB
+//Matrix post multiplication for CUDA on Device
+double* Post_Multiplication_CUDA_Device;//dC
 
 //B-part of AX=B
 double* Result_Elements;
 //Matrix post multiplication with its Transpose
 double* Post_Result_Elements;
 
-// B part CUDA
-double* Result_Elements_CUDA;
+// B part CUDA  on host copy from this
+double* Result_Elements_CUDA;//hA
 //Matrix post multiplication for CUDA
-double* Post_Result_CUDA;
+double* Post_Result_CUDA;//hC
+//Matrix pre multiplication for CUDA  on Device memalloc
+double* Result_Elements_CUDA_Device;//dA
+//Matrix post multiplication for CUDA  on Device memalloc
+double* Post_Result_CUDA_Device;//dC
+
 
 //size of nxn matrix post multiplication
 int FinalMatrixSize;
@@ -53,6 +69,9 @@ int replaceForSwap;
 
 // declaring function to find all the coefficients
 void findCoeffs();
+// declaring function for gaussian elimination
+int GaussianEliminateforCoeffs();
+
 /*
  * return 0 when zero 1 otherwise
  */
@@ -235,7 +254,7 @@ int ModifyWithDummyCoding(char* filename, String_Element** strings)
 	// to find-length of each row and populate strings
 	loadStringData(filename, strings);
 
-	printf("Reading from files with %d lines \n\n",Matrix_Rows);
+	printf("Reading from files with %d lines in kernel \n\n",Matrix_Rows);
 
 
 //	gettimeofday(&time_start, NULL);
@@ -371,9 +390,8 @@ int ModifyWithDummyCoding(char* filename, String_Element** strings)
 }
 
 /**
- *
+ * initializes the data-structures
  */
-
 void initializeMultiplier(){
 	//initializing
 	int iter_row;
@@ -408,7 +426,9 @@ int multiplyWithTransposeNO_CUDA()
 		for(sq_col=0; sq_col<Matrix_Cols; sq_col++) {
 			sum_post_multi=0;
 			for(iter_row=0; iter_row<Matrix_Rows; iter_row++) {
+				
 				sum_post_multi += Multiply_Elements[iter_row][sq_row] *Multiply_Elements[iter_row][sq_col];
+				
 				if(sq_col==0) {
 					sum_post_result += Multiply_Elements[iter_row][sq_row] * Result_Elements[iter_row];
 				}
@@ -450,14 +470,132 @@ int Assign_2D(){
 		}
 		Post_Result_Elements[iter_row]=Post_Result_CUDA[iter_row];
 	}
+	return 0;
 }
+
+/*
+ * Multiplication on GPU
+ */
+__global__ void GPU_Multi( float*A, float*C,int ROWs, int COLs ){
+	float Cvalue;
+	int row;
+	int col;
+	int iter;
+	Cvalue = 0.0;
+	row = blockIdx.y*blockDim.y + threadIdx.y;
+	col = blockIdx.x*blockDim.x + threadIdx.x;
+
+	if(row > COLs || col > COLs){return ;}
+	for(iter = 0; iter<ROWs; iter++){
+		Cvalue += A[iter*COLs + row]* A[iter*COLs + col];
+		
+	}
+
+	C[row*COLs +col] = Cvalue;
+
+}
+
+/*
+ * Result Multiplication on GPU
+ */
+__global__ void GPU_Multi_Res( float*A,float* B ,float*C, int ROWs,int COLs  ){
+	float Cvalue;
+	int row;
+	int col;
+	int iter;
+	Cvalue = 0.0;	row = blockIdx.y*blockDim.y + threadIdx.y; 	col = blockIdx.x*blockDim.x + threadIdx.x;
+
+	if(row > COLs || col > 1){return ;}
+	for(iter = 0; iter<ROWs; iter++){
+		Cvalue += A[iter*COLs + row]* B[row];
+	}
+	C[row*COLs +col] = Cvalue;
+
+}
+
 
 /**
  * Mulitiply A with-its transpose, B with A-transpose
  */
 int multiplyWithTransposeWith_CUDA(){
+	//start timer
+	int iter_row;
+	int iter_col;
+	int size;
+	cudaError_t err;
+	ftime(&time_start);
+	
+	//Allocating memory on GPU
+	size = Matrix_Rows*Matrix_Cols*sizeof(float);
+	cudaMalloc(&Multiply_Elements_CUDA_Device,size);
+	printf("\n Printing matrix pre multiplication \n");
+	for(iter_row=0;iter_row<Matrix_Rows;iter_row++){
+		for(iter_col=0;iter_col<Matrix_Cols;iter_col++){
+
+			printf("%f ", Multiply_Elements_CUDA[iter_row*Matrix_Cols + iter_col]);
+
+		}printf("\n");
+	}printf("\n");getchar();
+	cudaMemcpy(Multiply_Elements_CUDA_Device, Multiply_Elements_CUDA,size,cudaMemcpyHostToDevice);//Copying data to GPU
+	//Allocating memory for storing results on GPU
+	size = Matrix_Cols*Matrix_Cols*sizeof(float);
+	cudaMalloc(&Post_Multiplication_CUDA_Device,size);
+
+	// invoke kernel
+	dim3 dimBlock(BLOCK_SIZE,BLOCK_SIZE);
+	dim3 dimGrid1( (Matrix_Cols + dimBlock.x -1)/dimBlock.x,
+			(Matrix_Cols + dimBlock.y)/dimBlock.y);
+
+	// GPU Multi for A and its transpose
+	GPU_Multi<<<dimGrid1, dimBlock>>>( Multiply_Elements_CUDA_Device,Post_Multiplication_CUDA_Device,Matrix_Rows ,Matrix_Cols );
+	err = cudaThreadSynchronize();printf("\n Run kernel: %s\n", cudaGetErrorString(err));
+
+	cudaMemcpy(Post_Multiplication_CUDA, Post_Multiplication_CUDA_Device, size, cudaMemcpyDeviceToHost);
+	cudaFree(Multiply_Elements_CUDA_Device);
+	cudaFree(Post_Multiplication_CUDA_Device);
+
+	printf("\n Printing matrix post multiplication \n");
+	for(iter_row=0;iter_row<Matrix_Cols;iter_row++){
+		for(iter_col=0;iter_col<Matrix_Cols;iter_col++){
+
+			printf("%f ",Post_Multiplication_CUDA[iter_row*Matrix_Cols + iter_col]);
+
+		}printf("\n");
+	}printf("\n");getchar();
+
+	//--------------------------------------------------------------------------------
+
+	//Allocating memory on GPU -- A
+	size = Matrix_Rows*Matrix_Cols*sizeof(double);
+	cudaMalloc(&Multiply_Elements_CUDA_Device,size);
+	cudaMemcpy(Multiply_Elements_CUDA_Device, Multiply_Elements_CUDA,size,cudaMemcpyHostToDevice);//Copying data to GPU
+	// Allocating space for post-results gpu -- B
+	size = Matrix_Rows;
+	cudaMalloc(&Result_Elements_CUDA_Device,size);
+	//Copying data to GPU
+	cudaMemcpy(Result_Elements_CUDA_Device, Result_Elements_CUDA,size,cudaMemcpyHostToDevice);
+	
+	// Allocating space to store results...
+	size = Matrix_Cols;
+	cudaMalloc(&Post_Result_CUDA_Device,size);
+
+	// invoke kernel
+	dim3 dimGrid2( 1,(Matrix_Cols + dimBlock.y)/dimBlock.y);
+
+	GPU_Multi_Res<<<dimGrid2, dimBlock>>>(Multiply_Elements_CUDA_Device, Result_Elements_CUDA_Device, Post_Multiplication_CUDA_Device,Matrix_Rows ,Matrix_Cols);
+	err = cudaThreadSynchronize();printf("\n Run kernel: %s\n", cudaGetErrorString(err));
+
+	cudaMemcpy(Post_Result_CUDA, Post_Result_CUDA_Device, size, cudaMemcpyDeviceToHost);
+	cudaFree(Multiply_Elements_CUDA_Device);
+	cudaFree(Result_Elements_CUDA_Device);
+	cudaFree(Post_Multiplication_CUDA_Device);
 
 
+
+	ftime(&time_end);
+	iter_row = (int)(1000.0*(time_end.time - time_start.time)
+	                 +(time_end.millitm - time_start.millitm));
+	printf("\nMultiplied matrix with its transpose WITH-CUDA in  %u ms \n ",iter_row);
 	//post multipilication call below
 	Assign_2D();
 	// call gaussian
@@ -466,6 +604,7 @@ int multiplyWithTransposeWith_CUDA(){
 	free(Result_Elements);
 	// calling gaussian elimination
 	GaussianEliminateforCoeffs();
+	return 0;
 }
 
 /*
@@ -691,8 +830,8 @@ int main()
 	initializeMultiplier();
 
 	// CUDA Program for Multiplication and Gaussian Elimination and finding coefficients
-	multiplyWithTransposeNO_CUDA();	
-//	multiplyWithTransposeWith_CUDA();
+//	multiplyWithTransposeNO_CUDA();	
+	multiplyWithTransposeWith_CUDA();
 
 	getchar();
 	return 0;
