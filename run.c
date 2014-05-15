@@ -7,17 +7,17 @@
 typedef struct {
 	char* stringValue;
 } String_Element;
-String_Element* stringList;
+String_Element* stringList=NULL;
 
-String_Element** stringUnique;
+String_Element** stringUnique=NULL;
 
 /*
  * C - Categorical
  * N - Nominal
  * P - To-Be-Predicted
  */
-//char data_layout[] = {'C','C','C','N','N','N','N','P'};
-char data_layout[] = {Your data layout};
+char data_layout[] = {'C','C','C','N','N','N','N','P'};
+//char data_layout[] = {'N','N','P'};
 int* layout_Unique;
 int Matrix_Rows,Matrix_Cols;
 struct timeb time_start,time_end;
@@ -30,10 +30,20 @@ double** Multiply_Elements;
 //Matrix post multiplication with its Transpose
 double** Post_Multiply_Elements;
 
+// Ax=B Apart
+double* Multiply_Elements_CUDA;
+//Matrix post multiplication for CUDA
+double* Post_Multiplication_CUDA;
+
 //B-part of AX=B
 double* Result_Elements;
 //Matrix post multiplication with its Transpose
 double* Post_Result_Elements;
+
+// B part CUDA
+double* Result_Elements_CUDA;
+//Matrix post multiplication for CUDA
+double* Post_Result_CUDA;
 
 //size of nxn matrix post multiplication
 int FinalMatrixSize;
@@ -41,7 +51,8 @@ int FinalMatrixSize;
 //replacement for the sawp
 int replaceForSwap;
 
-
+// declaring function to find all the coefficients
+void findCoeffs();
 /*
  * return 0 when zero 1 otherwise
  */
@@ -95,7 +106,7 @@ int findFileLength(char* filename)
 int loadStringData(char* filename, String_Element** strings)
 {
 	char buffer[2000];
-
+	FILE* file;
 	int iter_row,iter_col,len_string;
 	int num_rows = findFileLength(filename);
 	int num_columns = sizeof(data_layout)/sizeof(data_layout[0]);
@@ -103,7 +114,7 @@ int loadStringData(char* filename, String_Element** strings)
 	Matrix_Cols =num_columns;
 	*strings = (String_Element*)malloc(num_rows*num_columns*sizeof(String_Element));
 
-	FILE* file = fopen(filename, "r");
+	file = fopen(filename, "r");
 	fgets(buffer, 200, file);
 
 	for(iter_row = 0; iter_row < num_rows; iter_row++) {
@@ -212,15 +223,19 @@ int findIndexinUniqueArray(char* string , int row, int size)
  */
 int ModifyWithDummyCoding(char* filename, String_Element** strings)
 {
-	int iter,temp_iter,num_categs=0;
+	int iter;
+	int temp_iter;
+	int	num_categs=0;
 	int final_cols = 0;
 	int temp_Unique;
 	int iter_col,iter_row;
-
+	int index,current_col;
+	ftime(&time_start);
+	
 	// to find-length of each row and populate strings
 	loadStringData(filename, strings);
 
-	printf("After fclose with %d lines \n\n",Matrix_Rows);
+	printf("Reading from files with %d lines \n\n",Matrix_Rows);
 
 
 //	gettimeofday(&time_start, NULL);
@@ -260,34 +275,42 @@ int ModifyWithDummyCoding(char* filename, String_Element** strings)
 			num_categs++;
 		}
 		layout_Unique[iter] = temp_Unique;
-		free(stringList);
+		if(stringList!=NULL){
+			free(stringList);
+			stringList = NULL;
+		}
+			
 	}
 
-	printf("Columns after Dummy-Coding %d \n", final_cols);
+//	printf("Initializing data-structures after Dummy-Coding into %d columns \n", final_cols);
 
 	//Resizing the multiplier-double-matrix's rows!!!
 	Multiply_Elements = (double**)malloc(Matrix_Rows*sizeof(double*));
 	//Resizing the result-double-matrix's rows!!!
 	Result_Elements = (double*)malloc(Matrix_Rows*sizeof(double));
 
+	// Resizing the multiplier-matrix for CUDA
+	Multiply_Elements_CUDA = (double*)malloc(Matrix_Rows*final_cols*sizeof(double));
+	//Resizing result for CUDA
+	Result_Elements_CUDA =(double*)malloc(Matrix_Rows*sizeof(double));
+
 
 	//add columns, initialize it to 0
 	for(iter_row=0; iter_row<Matrix_Rows; iter_row++) {
 		Multiply_Elements[iter_row]=(double*)malloc(final_cols*sizeof(double));
-
 		Multiply_Elements[iter_row][0]=1;
+		Multiply_Elements_CUDA[iter_row*final_cols]=1;
 		for(iter_col=1; iter_col<final_cols; iter_col++) {
 			Multiply_Elements[iter_row][iter_col]=0;
+			Multiply_Elements_CUDA[iter_row*final_cols + iter_col] = 0;
 		}
+		Result_Elements_CUDA[iter_row]=0;
 
-		if(iter_row%1000 == 0) {
-			printf("Initialzing Column.No %d of %d \n", iter_row,Matrix_Rows);
-		}
 	}
 
-	printf("\n Adding Data to Columns after Dummy-Coding \n");
+//	printf("\n Adding Data to Columns after Dummy-Coding \n");
 	//add data to Elements
-	int index,current_col=0;
+	current_col=0;
 	num_categs=0;
 	for(iter_col=0; iter_col<sizeof(data_layout); iter_col++) {
 
@@ -296,8 +319,10 @@ int ModifyWithDummyCoding(char* filename, String_Element** strings)
 				if( (*strings)[iter_row*Matrix_Cols+iter_col].stringValue!=NULL && strlen((*strings)[iter_row*Matrix_Cols+iter_col].stringValue)>0) {
 					if(data_layout[iter_col]=='N') {
 						Multiply_Elements[iter_row][current_col+1]= atof( (*strings)[iter_row*Matrix_Cols+iter_col].stringValue );
+						Multiply_Elements_CUDA[iter_row*final_cols + current_col +1 ] = atof( (*strings)[iter_row*Matrix_Cols+iter_col].stringValue );
 					} else if(data_layout[iter_col]=='P') {
 						Result_Elements[iter_row]=atof( (*strings)[iter_row*Matrix_Cols+iter_col].stringValue );
+						Result_Elements_CUDA[iter_row] = atof( (*strings)[iter_row*Matrix_Cols+iter_col].stringValue );
 					}
 				}
 			}
@@ -309,6 +334,7 @@ int ModifyWithDummyCoding(char* filename, String_Element** strings)
 					index = findIndexinUniqueArray((*strings)[iter_row*Matrix_Cols+iter_col].stringValue, num_categs, layout_Unique[iter_col]);
 					if(index>0) {
 						Multiply_Elements[iter_row][current_col+index]=1;
+						Multiply_Elements_CUDA[iter_row*final_cols + current_col + index] = 1;
 					}
 				}
 			}
@@ -325,20 +351,43 @@ int ModifyWithDummyCoding(char* filename, String_Element** strings)
 
 
 	
-	printf("Original Matrix ?? \n");getchar();
-	for(iter_row =0;iter_row<Matrix_Rows;iter_row++){
-		for(iter_col =0;iter_col<Matrix_Cols;iter_col++){
-			printf("%f ",Multiply_Elements[iter_row][iter_col]);
-		}
-		printf("\t result %f \n",Result_Elements[iter_row]);
-	}
-	printf("\n");
+//	printf("Original Matrix ?? \n");getchar();
+//	for(iter_row =0;iter_row<Matrix_Rows;iter_row++){
+//		for(iter_col =0;iter_col<Matrix_Cols;iter_col++){
+//			printf("%f ",Multiply_Elements[iter_row][iter_col]);
+//		}
+//		printf("\t result %f \n",Result_Elements[iter_row]);
+//	}
+//	printf("\n");
 
 //	gettimeofday(&time_end, NULL);
 //	printf("\n Finished pre-processing on Mul %f, Res %f in  %lu ms\n", Multiply_Elements[Matrix_Rows-1][final_cols-2],Result_Elements[Matrix_Rows-1] , (time_end.tv_usec - time_start.tv_usec)/1000);
-	printf("\n Finished pre-processing on Mul %f, Res %f \n", Multiply_Elements[Matrix_Rows-1][final_cols-1],Result_Elements[Matrix_Rows-1] );
+	ftime(&time_end);
+	iter_row = (int)(1000.0*(time_end.time - time_start.time)
+	                 +(time_end.millitm - time_start.millitm));
+	printf("\nFinished pre-processing on Mul %f, Res %f in %d ms \n", Multiply_Elements[Matrix_Rows-1][final_cols-1],Result_Elements[Matrix_Rows-1],iter_row );
 	free(stringUnique);
 	return 0;
+}
+
+/**
+ *
+ */
+
+void initializeMultiplier(){
+	//initializing
+	int iter_row;
+	Post_Multiply_Elements = (double**)malloc(Matrix_Cols*sizeof(double*));
+	Post_Result_Elements = (double*)malloc(Matrix_Cols*sizeof(double));//because its a column matrix
+	Post_Multiplication_CUDA = (double*)malloc(Matrix_Cols*Matrix_Cols*sizeof(double));
+	Post_Result_CUDA = (double*)malloc(Matrix_Cols*sizeof(double));
+
+
+	for(iter_row=0;iter_row<Matrix_Cols;iter_row++){
+		Post_Multiply_Elements[iter_row] = (double*)malloc((Matrix_Cols)*sizeof(double));//initialized a row
+	}
+
+
 }
 
 /**
@@ -346,18 +395,15 @@ int ModifyWithDummyCoding(char* filename, String_Element** strings)
  */
 int multiplyWithTransposeNO_CUDA()
 {
-	ftime(&time_start);
+	
 	int iter_row,sq_col,sq_row;
-	printf("\n");
 	double sum_post_multi=0;
 	double sum_post_result=0;
 	// Multiplying A with A(Transpose)
-	//initializing
-	Post_Multiply_Elements = (double**)malloc(Matrix_Cols*sizeof(double*));
-	Post_Result_Elements = (double*)malloc(Matrix_Cols*sizeof(double));//because its a column matrix
+	ftime(&time_start);
+	printf("\n");
 
 	for(sq_row=0; sq_row<Matrix_Cols; sq_row++) {
-		Post_Multiply_Elements[sq_row] = (double*)malloc((Matrix_Cols)*sizeof(double));//initialized a row
 		sum_post_result=0;
 		for(sq_col=0; sq_col<Matrix_Cols; sq_col++) {
 			sum_post_multi=0;
@@ -370,16 +416,16 @@ int multiplyWithTransposeNO_CUDA()
 			Post_Multiply_Elements[sq_row][sq_col] = sum_post_multi;
 		}
 		Post_Result_Elements[sq_row] = sum_post_result;
-		printf("Completed %d of %d \n",(sq_row+1),(Matrix_Cols) );
+//		printf("Completed %d of %d \n",(sq_row+1),(Matrix_Cols) );
 	}
 
-	printf("\n\n Post Multiplication ??\n");getchar();
-	for(sq_row=0;sq_row<Matrix_Cols;sq_row++){
-		for(sq_col=0;sq_col<Matrix_Cols;sq_col++){
-			printf("%f ",Post_Multiply_Elements[sq_row][sq_col]);
-		}
-		printf("\t result %f \n",Post_Result_Elements[sq_row]);
-	}getchar();
+//	printf("\n\n Post Multiplication ??\n");getchar();
+//	for(sq_row=0;sq_row<Matrix_Cols;sq_row++){
+//		for(sq_col=0;sq_col<Matrix_Cols;sq_col++){
+//			printf("%f ",Post_Multiply_Elements[sq_row][sq_col]);
+//		}
+//		printf("\t result %f \n",Post_Result_Elements[sq_row]);
+//	}getchar();
 	ftime(&time_end);
 	iter_row = (int)(1000.0*(time_end.time - time_start.time)
 	                 +(time_end.millitm - time_start.millitm));
@@ -387,8 +433,39 @@ int multiplyWithTransposeNO_CUDA()
 	FinalMatrixSize = Matrix_Cols;
 	free(Multiply_Elements);
 	free(Result_Elements);
-
+	// calling gaussian elimination
+	GaussianEliminateforCoeffs();
 	return 0;
+}
+
+/**
+ * getting back to Multiply elements/woCUDA
+ */
+int Assign_2D(){
+	int iter_row;
+	int iter_col;
+	for(iter_row=0;iter_row<Matrix_Cols;iter_row++){
+		for(iter_col=0;iter_col<Matrix_Cols;iter_col++){
+			Post_Multiply_Elements[iter_row][iter_col] = Post_Multiplication_CUDA[iter_row*Matrix_Cols + iter_col];
+		}
+		Post_Result_Elements[iter_row]=Post_Result_CUDA[iter_row];
+	}
+}
+
+/**
+ * Mulitiply A with-its transpose, B with A-transpose
+ */
+int multiplyWithTransposeWith_CUDA(){
+
+
+	//post multipilication call below
+	Assign_2D();
+	// call gaussian
+	FinalMatrixSize = Matrix_Cols;
+	free(Multiply_Elements);
+	free(Result_Elements);
+	// calling gaussian elimination
+	GaussianEliminateforCoeffs();
 }
 
 /*
@@ -513,7 +590,7 @@ int clearRowsBelow(int diag){
 
 				//access replaceForSwap for row-swapping
 				swapMatrix(0, diag, replaceForSwap);
-				printf("\n post swap replac zero with %f ... \n",Post_Multiply_Elements[diag][diag] );
+//				printf("\n post swap replac zero with %f ... \n",Post_Multiply_Elements[diag][diag] );
 				getchar();printMatrix();
 				clearRowsBelow(diag);
 			} else if(replac==1) { //columns
@@ -528,9 +605,9 @@ int clearRowsBelow(int diag){
 //				getchar();printMatrix();
 				clearRowsBelow(diag);
 			} else if(replac<0) {
-				printf("\n\n\n\n\n zeros at %f diagona at %d and Cols are %d\n",Post_Multiply_Elements[diag-1][diag-1],diag,Matrix_Cols);getchar();
+//				printf("\n\n\n\n\n zeros at %f diagona at %d and Cols are %d\n",Post_Multiply_Elements[diag-1][diag-1],diag,Matrix_Cols);getchar();
 				FinalMatrixSize = diag;
-				printf(" Replac Zeros Aya THIS IS THE END \n\n\n\n\n");
+//				printf(" Replac Zeros Aya THIS IS THE END \n\n\n\n\n");
 				return -1;
 			}
 		
@@ -561,22 +638,28 @@ void ConvertoIdentityMatrixWithoutCUDA()
  */
 int GaussianEliminateforCoeffs()
 {
-	int sq_row,sq_col;
+	//int sq_row,sq_col;
+	int timer;
+	ftime(&time_start);
 	printf("\n\n Gaussian !!!");
 	AdjustDiagonalElements();
 
 	ConvertoIdentityMatrixWithoutCUDA();
 //	ConvertoIdentityMatrixWithCUDA();
 
-	printf("\n Post Gaussian Elimination??\n");getchar();
-	for(sq_row=0;sq_row<Matrix_Cols;sq_row++){
-		for(sq_col=0;sq_col<Matrix_Cols;sq_col++){
-			printf("%f ",Post_Multiply_Elements[sq_row][sq_col]);
-		}
-		printf("\t result %f \n",Post_Result_Elements[sq_row]);
-	}
+//	printf("\n Post Gaussian Elimination??\n");getchar();
+//	for(sq_row=0;sq_row<Matrix_Cols;sq_row++){
+//		for(sq_col=0;sq_col<Matrix_Cols;sq_col++){
+//			printf("%f ",Post_Multiply_Elements[sq_row][sq_col]);
+//		}
+//		printf("\t result %f \n",Post_Result_Elements[sq_row]);
+//	}
+	ftime(&time_end);
+	timer = (int)(1000.0*(time_end.time - time_start.time)
+	                 +(time_end.millitm - time_start.millitm));
+	printf("\n Performed GaussianElimination WITHOUT using CUDA in  %u ms \n ",timer);
 	
-	printf("\n final size to be dealt with is %d",FinalMatrixSize);
+	findCoeffs();
 	
 	return 0;
 }
@@ -584,7 +667,8 @@ int GaussianEliminateforCoeffs()
 void findCoeffs()
 {
 	int iter_diags;
-	printf("\n\n the coefficients are \n\n");
+	
+	printf("\n\n the final %d coefficients are \n\n",FinalMatrixSize);
 	for(iter_diags =0; iter_diags<FinalMatrixSize; iter_diags++) {
 		double coeff=0;
 		coeff = Post_Result_Elements[iter_diags] / Post_Multiply_Elements[iter_diags][iter_diags];
@@ -599,17 +683,16 @@ void findCoeffs()
 int main()
 {
 	//file to get data from
-	char* CSV_file = "Your file path";
+	char* CSV_file = "F:/C/test.csv";
 	
 	//String matrix
 	String_Element* strings;
 	ModifyWithDummyCoding(CSV_file, &strings);
-	//further Actual Algo !!!
-	multiplyWithTransposeNO_CUDA();
-	
+	initializeMultiplier();
+
+	// CUDA Program for Multiplication and Gaussian Elimination and finding coefficients
+	multiplyWithTransposeNO_CUDA();	
 //	multiplyWithTransposeWith_CUDA();
-	GaussianEliminateforCoeffs();
-	findCoeffs();
 
 	getchar();
 	return 0;
